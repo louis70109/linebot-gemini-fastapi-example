@@ -1,4 +1,4 @@
-# FastAPI 佈署到 Cloud Run 範例
+# FastAPI + Gemini = 行事曆摘要產生器
 
 本範例展示了如何使用 Google Cloud Run 快速佈署 FastAPI 應用程式。這個範例將引導您完成以下步驟：
 

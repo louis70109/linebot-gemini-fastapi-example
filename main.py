@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import sys
 if os.getenv('API_ENV') != 'production':
     from dotenv import load_dotenv
@@ -25,7 +26,9 @@ from linebot.v3.webhooks import (
 )
 
 import uvicorn
-from firebase import firebase
+import json
+from datetime import datetime, timedelta
+import urllib
 import google.generativeai as genai
 
 logging.basicConfig(level=os.getenv('LOG', 'WARNING'))
@@ -64,6 +67,48 @@ async def health():
     return 'ok'
 
 
+def split_gcal_time_utc(cal_date):
+    if "/" in cal_date:
+        start_time_str, end_time_str = cal_date.split("/")
+        start_time = datetime.strptime(start_time_str, "%Y%m%dT%H%M%S%z")
+        end_time = datetime.strptime(end_time_str, "%Y%m%dT%H%M%S%z")
+        utc_plus_8 = timedelta(hours=8)
+        start_time_adjusted = start_time - utc_plus_8
+        end_time_adjusted = end_time - utc_plus_8
+        logging.debug("-------start '/'-----------")
+        logging.debug(start_time_adjusted)
+        logging.debug(str(start_time_adjusted.strftime("%Y%m%dT%H%M%S") + "Z"))
+        logging.debug(end_time_adjusted)
+        logging.debug(str(end_time_adjusted.strftime("%Y%m%dT%H%M%S") + "Z"))
+        logging.debug("-------end '/'-----------")
+
+        return str(start_time_adjusted.strftime("%Y%m%dT%H%M%S") + "Z")+'/'+str(end_time_adjusted.strftime("%Y%m%dT%H%M%S") + "Z")
+    else:
+        start_time = datetime.strptime(cal_date, "%Y%m%dT%H%M%S%z")
+        end_time = datetime.strptime(cal_date, "%Y%m%dT%H%M%S%z")
+        utc_plus_8 = timedelta(hours=8)
+        start_time_adjusted = start_time - timedelta(hours=8)
+        end_time_adjusted = end_time - timedelta(hours=7)
+        logging.debug("----------no '/'--------------")
+        logging.debug(start_time_adjusted)
+        logging.debug(str(start_time_adjusted.strftime("%Y%m%dT%H%M%S") + "Z"))
+        logging.debug(end_time_adjusted)
+        logging.debug(str(end_time_adjusted.strftime("%Y%m%dT%H%M%S") + "Z"))
+        logging.debug("----------no '/'--------------")
+
+        return str(start_time_adjusted.strftime("%Y%m%dT%H%M%S") + "Z")+'/'+str(end_time_adjusted.strftime("%Y%m%dT%H%M%S") + "Z")
+
+
+def create_gcal_url(
+        title='看到這個..請重生',
+        date='20230524T180000/20230524T220000',
+        location='那邊',
+        description='TBC'):
+    base_url = "https://www.google.com/calendar/render?action=TEMPLATE"
+    event_url = f"{base_url}&text={urllib.parse.quote(title)}&dates={date}&location={urllib.parse.quote(location)}&details={urllib.parse.quote(description)}"
+    return event_url+"&openExternalBrowser=1"
+
+
 @app.post("/webhooks/line")
 async def handle_callback(request: Request):
     signature = request.headers['X-Line-Signature']
@@ -84,34 +129,36 @@ async def handle_callback(request: Request):
         if not isinstance(event.message, TextMessageContent):
             continue
         text = event.message.text
-        user_id = event.source.user_id
-        msg_type = event.message.type
-        fdb = firebase.FirebaseApplication(firebase_url, None)
-        user_chat_path = f'chat/{user_id}'
-        chat_state_path = f'state/{user_id}'
-        chatgpt = fdb.get(user_chat_path, None)
 
-        if msg_type == 'text':
-
-            if chatgpt is None:
-                messages = []
-            else:
-                messages = chatgpt
-
-            if text == '!清空':
-                text = TextMessage(text='對話歷史紀錄已經清空！')
-                fdb.delete(user_chat_path, None)
-            else:
+        if event.message.type == 'text':
+            try:
                 model = genai.GenerativeModel('gemini-pro')
-                messages.append({'role': 'user', 'parts': [text]})
-                response = model.generate_content(messages)
-                messages.append({'role': 'model', 'parts': [response.text]})
-                # 更新firebase中的對話紀錄
-                fdb.put_async(user_chat_path, None, messages)
+                prompt = 'please arrange following user text, give me a json and contain title, description, locations(array) and dates(array) (example: 20210407T180000Z/20210407T190000Z). current time is {datetime.now()}, use ZH-TW. json example = `{ "title": "去台大彈吉他", "description": "TBC", "locations": ["台大"], "dates": ["20240409T150000Z"]}\n'+text
+
+                response = model.generate_content(prompt)
+                logging.debug(response.text)
+                # 去除 markdown 格式
+
+                text_string = re.sub(
+                    r"(```|\*\*|~|\(.*?\)|`.*?`|_|\n|JSON|json)", "", response.text)
+                logging.debug('JSON string: '+str(text_string))
+                # 將 text_string 轉換成字典
+                data = json.loads(text_string)
+                title = data["title"]
+                description = data["description"] if data["description"] is not None else 'TBC'
+                location = data["locations"][0] if len(
+                    data["locations"]) > 0 else 'TBC'
+                dates = data["dates"][0]
+
+                text = create_gcal_url(
+                    title, split_gcal_time_utc(dates), location, description)
+            except Exception as e:
+                logging.warning('Gemini 解析失敗\n'+e)
+                continue
         await line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
-                messages=[TextMessage(text=response.text)]
+                messages=[TextMessage(text=text)]
             )
         )
     return 'OK'
