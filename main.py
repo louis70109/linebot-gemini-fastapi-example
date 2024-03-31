@@ -133,7 +133,7 @@ async def handle_callback(request: Request):
         if event.message.type == 'text':
             try:
                 model = genai.GenerativeModel('gemini-pro')
-                prompt = 'please arrange following user text, give me a json and contain title, description, locations(array) and dates(array) (example: 20210407T180000Z/20210407T190000Z). current time is {datetime.now()}, use ZH-TW. json example = `{ "title": "去台大彈吉他", "description": "TBC", "locations": ["台大"], "dates": ["20240409T150000Z"]}\n'+text
+                prompt = 'please arrange following user text, give me a json and contain title, description, locations(array) and dates(array) (example: 20210407T180000Z/20210407T190000Z). current time is '+datetime.now()+', use ZH-TW. json example = `{ "title": "去台大彈吉他", "description": "TBC", "locations": ["台大"], "dates": ["20240409T150000Z"]}\n'+text
 
                 response = model.generate_content(prompt)
                 logging.debug(response.text)
